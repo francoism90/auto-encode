@@ -1,6 +1,6 @@
 <?php
 $base = '/mnt/tmp/convert';
-$target = '/mnt/data/www/dom4/storage/app/upload/video';
+$target = '/path/to/encoded';
 $tmp = '/tmp';
 $encode = ['.mp4','.mkv','.wmv','.mpeg','.mpg','.avi','.ogm','.divx'];
 $subs = ['ass','ssa','srt','sub'];
