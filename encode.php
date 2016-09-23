@@ -1,36 +1,37 @@
 <?php
 class Encode {
   private $config = [
-    'base' => '/home/archie/encode/',
-    'target' => '/home/archie/encoded/',
-    'tmp' => '/tmp/conv/',
-    'locales' => ['eng','ned','en','nl','unk'],
-    'subtitles' => ['ass','ssa','srt','sub'],
+    'base' => '/home/archie/encode/', // Use this directory for processing video files
+    'target' => '/mnt/data/myvideos/', // Encode and put files in this directory
+    'tmp' => '/tmp/encode/', // Temp folder (logging, creating screens, etc.)
+    'locales' => ['eng','ned','en','nl','unk'], // Languages to scan for subtitles (in order of importance)
+    'subtitles' => ['ass','ssa','srt','sub'] // Valid subtitle-format(s)
   ];
-  private $data = ['tmp' => [], 'encoded' => []];
+  private $data = [];
 
   public function __construct() {
-    // Create required directories
-    mkdir($this->config['tmp'], 0770);
-    mkdir($this->config['base'] . 'done', 0770);
+    // Create directories
+    mkdir($this->config['base'] . 'keep', 0775);
+    mkdir($this->config['base'] . 'failed', 0775);
 
-    // Scan directory
-    foreach (glob($this->config['base'].'*.{mp4,mkv,wmv,mpeg,mpeg,avi,ogm,divx,mov,m4v,flv}', GLOB_BRACE) as $file) {
-      // Set Data
+    // Scan directory with following extensions
+    foreach (glob($this->config['base'].'*.{avi,divx,flv,m4v,mkv,mov,mp4,mpeg,mpg,ogm,wmv}', GLOB_BRACE) as $file) {
+      // Init
+      $this->data = ['tmp' => [], 'encoded' => []];
+      $this->exec(str_replace('%tmp%', $this->config['tmp'], 'rm -rf %tmp%; mkdir -p %tmp%;'));
+
+      // Set data
       $this->set('tmp', $file);
       $this->set('encoded', $this->config['target'] . $this->get('tmp')['path']['filename'] . '.mp4');
 
-      // Is already encoded and valid?
+      // Tasks to execute
       $this->debug("Processing $file");
-      if (!$this->valid()) {
-        $this->debug('Encoding');
-        $this->extract()->encode();
-        continue;
-      }
-
-      // Final steps
-      $this->debug('Creating Images');
-      $this->images()->move();
+      if (!file_exists($this->get('encoded')['fullpath']))
+        $this->debug('Encoding started')->extract()->encode()->debug('Encoding finished');
+      elseif (!$this->exists('-thumb.jpg') || !$this->exists('-screen.jpg'))
+        $this->debug('Creating images')->images()->debug('Images created');
+      else
+        $this->debug('Moving files')->move();
     }
   }
 
@@ -38,8 +39,17 @@ class Encode {
     $this->data[$key] = ['fullpath' => $path, 'path' => pathinfo($path), 'info' => $this->ffprobe($path)];
   }
 
+  public function exists(string $file, string $path = 'target') {
+    return file_exists($this->config[$path] . $this->get('tmp')['path']['filename'] . $file);
+  }
+
   public function debug(string $str) {
-    echo date(DATE_RFC2822)." $str\n";
+    echo date('d-m-Y H:i:s')."|$str\n";
+    return $this;
+  }
+
+  public function exec(string $str) {
+    return shell_exec($str);
   }
 
   public function get(string $key) {
@@ -47,18 +57,7 @@ class Encode {
   }
 
   public function ffprobe(string $path) {
-    return file_exists($path) ? json_decode(shell_exec("ffprobe -v quiet -print_format json -show_format -show_streams $path"), true) : [];
-  }
-
-  public function valid() {
-    if (!empty($this->get('encoded')['info'])) {
-      $original = $this->get('tmp')['info']['format']['duration'];
-      $encoded = $this->get('encoded')['info']['format']['duration'];
-      $size = 100 *(($encoded - $original) / $original);
-      $this->debug("Percentage diff: $size");
-      return ($size > -10 && $size < 10); // max. allowed margin
-    }
-    return false;
+    return file_exists($path) ? json_decode($this->exec('ffprobe -v error -print_format json -show_format -show_streams '.escapeshellarg($path)), true) : [];
   }
 
   public function extract() {
@@ -69,48 +68,65 @@ class Encode {
 
       // Validate codec
       $format = strtolower($stream['codec_name']);
-      $format = in_array($format, $this->config['subtitles']) ? $format : 'srt';
+      $format = in_array($format, $this->config['subtitles']) ? $format : 'srt'; // fallback srt on non format match
 
-      // Strip tags
-      $stream['tags'] = is_array($stream['tags']) ? array_change_key_case($stream['tags']) : []; // Tags case can differ
-      $language = preg_replace('/[^a-zA-Z0-9]+/', '', $stream['tags']['language']) ?: 'unknown';
+      // Get stream language tag
+      $stream['tags'] = is_array($stream['tags']) ? array_change_key_case($stream['tags']) : []; // Tag keys may differ
+      $language = preg_replace('/[^a-zA-Z0-9]+/', '', $stream['tags']['language']) ?: 'unknown'; // Strip invalid chars
 
       // Debug
       $this->debug("Found subtitle ($language)");
 
       // Extract subtitle
       $path = $this->config['base'] . $this->get('tmp')['path']['filename'] . '_' . $stream['index'] . "$language.$format";
-      shell_exec(sprintf('ffmpeg -y -v fatal -threads 0 -i %s -map 0:%s %s', $this->get('tmp')['fullpath'], $stream['index'], $path));
+      $this->exec(sprintf("ffmpeg -y -v error -threads 4 -i %s -map 0:%s %s", escapeshellarg($this->get('tmp')['fullpath']), $stream['index'], escapeshellarg($path)));
     }
     return $this;
   }
 
   public function encode() {
-    $cmd = sprintf('ffmpeg -y -v fatal -threads 0 -i %s -c:v libx264 -crf 23 -preset ultrafast -c:a aac -b:a 160k -tune zerolatency -movflags +faststart', $this->get('tmp')['fullpath']);
+    // Get Subtitle (if exists)
+    $subtitle = '';
     foreach (glob(sprintf('%s_*.{%s}', $this->config['base'] . $this->get('tmp')['path']['filename'], implode(',', $this->config['subtitles'])), GLOB_BRACE) as $file) {
       foreach ($this->config['locales'] as $locale) { // find first match
-        // Matches locale match and contains at least 150 lines (skip chapter-subtitle, etc.)
-        if (stristr($file, $locale) && shell_exec("wc -l < $file") > 150) {
+        // Matches locale and contains 150> lines (skip chapter-subtitle, etc.)
+        if (stristr($file, $locale) && $this->exec('wc -l < '.escapeshellarg($file)) > 150) {
           $this->debug("Burn-In subtitle ($file)");
-          $cmd.= " -vf subtitles=$file";
+          $subtitle = ' subtitles='.escapeshellarg($file);
           break;
         }
       }
     }
-    shell_exec(sprintf("$cmd %s", $this->get('encoded')['fullpath']));
+
+    // Try HW-Acceleration encoding
+    $cmd = "FFREPORT=file=%s:level=32 ffmpeg -y -report -v quiet -hide_banner -xerror -nostdin -threads 4 -vaapi_device /dev/dri/renderD128 -hwaccel vaapi -hwaccel_output_format vaapi -i %s -vf format='nv12|vaapi,hwupload' $subtitle -c:v h264_vaapi -qp 20 -bf 2 -quality 2 -movflags +faststart -c:a aac -b:a 128k -f mp4 %s";
+    $cmd = sprintf($cmd, escapeshellarg($this->config['tmp'] . 'ffreport.log'), escapeshellarg($this->get('tmp')['fullpath']), escapeshellarg($this->get('encoded')['fullpath']));
+    $this->exec($cmd);
+
+    // Fallback on safe-mode
+    $out = file_get_contents($this->config['tmp'] . 'ffreport.log');
+    if (stristr($out, 'No VAAPI support') || stristr($out, 'Conversion failed')) {
+      $cmd = str_replace(['-vaapi_device /dev/dri/renderD128 -hwaccel vaapi -hwaccel_output_format vaapi',"-vf format='nv12|vaapi,hwupload'",'h264_vaapi','-quality 2'], ['', (!empty($subtitle)) ? "-vf $subtitle" : '' ,'libx264','-preset veryfast'], $cmd);
+      $this->debug('Fallback mode')->exec($cmd);
+    }
+
+    // Conversion failed completely
+    if (stristr(file_get_contents($this->config['tmp'] . 'ffreport.log'), 'Conversion failed')) {
+      $this->debug('Conversion failed')->move('failed')->exec(sprintf('rm -rf %s', escapeshellarg($this->get('encoded')['fullpath'])));
+    }
     return $this;
   }
 
   public function images() {
-    $cmd = 'rm -rf %tmp%*; ffmpeg -threads 0 -v fatal -i %target%.mp4 -an -s 480x300 -vf fps=1/100 -qscale:v 10 %tmp%1-%03d.jpg;';
-    $cmd.= 'cp -f %tmp%1-001.jpg %target%-thumb.jpg; cp -f %tmp%1-002.jpg %target%-thumb.jpg;';
-    $cmd.= 'montage -mode concatenate -tile 4x %tmp%1-*.jpg %target%-screen.jpg';
-    shell_exec(str_replace(['%tmp%','%target%'], [$this->config['tmp'], $this->config['target'] . $this->get('tmp')['path']['filename']], $cmd));
+    $cmd = 'ffmpeg -v error -xerror -threads 4 -i %target%.mp4 -an -s 480x300 -vf fps=1/100 -qscale:v 10 %tmp%1-%03d.jpg && ';
+    $cmd.= 'montage -mode concatenate -tile 4x %tmp%1-*.jpg %target%-screen.jpg && ';
+    $cmd.= 'cp -f %tmp%1-001.jpg %target%-thumb.jpg; cp -f %tmp%1-002.jpg %target%-thumb.jpg 2>&1;';
+    $this->exec(str_replace(['%tmp%','%target%'], [escapeshellarg($this->config['tmp']), escapeshellarg($this->config['target'] . $this->get('tmp')['path']['filename'])], $cmd));
     return $this;
   }
 
-  public function move() {
-    shell_exec(str_replace(['%keep%','%filename%'], [$this->config['base'] . 'done', $this->config['base'] . $this->get('tmp')['path']['filename']], 'mv -t %keep% %filename%.* %filename%_*'));
+  public function move(string $path = 'keep') {
+    $this->exec(str_replace(['%path%','%filename%'], [escapeshellarg($this->config['base'] . $path), escapeshellarg($this->config['base'] . $this->get('tmp')['path']['filename'])], 'mv -t %path% %filename%.* %filename%_* 2>&1'));
     return $this;
   }
 }
