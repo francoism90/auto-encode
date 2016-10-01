@@ -3,11 +3,15 @@ Massconvert any videoformat readable by ffmpeg to H.264 video optimized for web.
 As a bonus we'll also create a screenshot and a thumbnail for you.
 
 # Features
-* Auto. extract (in-built) subtitles of video files (with language code)
-* Encode with ffmpeg, optimized for web (preset: ultrafast, tune: zerolatency, faststart)
-* Burn-in (extracted) subtitles-files into the video
-* Create a screenshot and thumbnail of the (encoded) video
-* Validate if encoding has been successfully done
+* Encode with ffmpeg, optimized for web (faststart)
+* Auto extract subtitles and burn-in the subtitle matching prefered locale
+* Create a screenshot and thumbnail of the encoded video
+* Validate if encoding has been successful
+* HW-Acceleration encoding (optimized for Intel GPU) with fallback to software encoding
+
+# Todo
+* Video/audio extract
+* '-map' selection
 
 # Readme
 ## Requirements
