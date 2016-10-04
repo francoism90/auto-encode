@@ -14,15 +14,25 @@ class FFmpeg
     // Fill queue
     foreach (glob($this->path['base'] .'*.{avi,divx,flv,m4v,mkv,mov,mp4,mpeg,mpg,ogm,wmv}', GLOB_BRACE) as $file) {
       // Remove invalid symbols
-      rename($file, $this->path['base'] . preg_replace('/[^A-Za-z0-9\. -()]/', '', basename($file)));
+      $path = $this->clean($file);
+      rename($file, $path['fullpath']);
 
       // Add to queue
-      $this->queue[] = ['file' => $file, 'path' => pathinfo($file), 'added' => time(), 'status' => 0];
+      $this->queue[] = ['file' => $path['fullpath'], 'path' => $path];
     }
 
     // Check we have data
     if (empty($this->queue))
       exit('No files to process');
+  }
+
+  private function clean(string $file) {
+    $path = pathinfo($file);
+    $path['filename'] = preg_replace('/\s+/', ' ', $path['filename']);
+    $path['filename'] = preg_replace('/[^a-zA-Z0-9 ()_-]/', '', $path['filename']);
+    $path['basename'] = trim($path['filename']) . '.' . $path['extension'];
+    $path['fullpath'] = $path['dirname'] . '/' . $path['basename'];
+    return $path;
   }
 
   private function streams() {
@@ -38,9 +48,11 @@ class FFmpeg
               'vaapi_device' => '/dev/dri/renderD128',
               'hwaccel' => 'vaapi',
               'hwaccel_output_format' => 'vaapi',
-              'vcodec' => 'h264_vaapi'
+              'vcodec' => 'h264_vaapi',
+              'profile:v' => 100,
+              'level:v' => 42,
+              'f' => 'mp4'
             ],
-            'unset' => ['preset'],
             'fallback' => 'libx264',
             'ext' => '.mp4'
           ];
@@ -48,7 +60,10 @@ class FFmpeg
       case 'libx264':
         return [
           'args' => [
-            'vcodec' => 'libx264'
+            'vcodec' => 'libx264',
+            'profile:v' => 'high',
+            'level:v' => '4.2',
+            'f' => 'mp4'
           ],
           'unset' => ['vaapi_device','hwaccel','hwaccel_output_format'],
           'ext' => '.mp4'
@@ -63,18 +78,21 @@ class FFmpeg
         'y' => null,
         'xerror' => null,
         'v' => 'quiet',
-        'threads' => 0,
         'vaapi_device' => null,
-        'hwaccel' => null,
+        'hwaccel' => 'none',
         'hwaccel_output_format' => null,
         'i' => escapeshellarg($this->entry['file']),
         'vcodec' => 'libx264',
-        'vf' => null,
-        'qp' => 20,
-        'bf' => 2,
+        'profile:v' => 'high',
+        'level:v' => '4.2',
+        'preset' => 'ultrafast',
+        'movflags' => '+faststart',
         'quality' => 2,
-        'preset' => 'veryfast',
-        'movflags' => '+faststart'
+        'vf' => null,
+        'threads' => 0,
+        'acodec' => 'aac',
+        'b:a' => '160k',
+        'f' => null
       ],
       'unset' => [],
       'fallback' => '',
@@ -117,7 +135,10 @@ class FFmpeg
 
       // Perform task
       foreach ($this->tasks as $task => $args) {
-        $this->{'task'.ucfirst($task)}($args);
+        $method = 'task' .ucfirst($task);
+        $this->debug("Start $method");
+        $this->{$method}($args);
+        $this->debug("End $method");
       }
     }
   }
@@ -150,9 +171,8 @@ class FFmpeg
   }
 
   private function localeMatches(string $locales, string $exts) {
-    $path = $this->path['base'] . $this->entry['path']['filename'];
     $matches = [];
-    foreach (glob($path . '_ext_{'.$locales.'}*.{'.$exts.'}', GLOB_BRACE) as $file) {
+    foreach (glob($this->path['base'] . $this->entry['path']['filename'] . '_ext_{'.$locales.'}*.{'.$exts.'}', GLOB_BRACE) as $file) {
       $matches[] = $file;
     }
     return $matches;
@@ -166,7 +186,7 @@ class FFmpeg
 
   private function validate() {
     $log = file_get_contents($this->path['tmp'] . 'ffreport.log') ?: 'Conversion failed';
-    if (!stristr($log, 'No VAAPI support') && !stristr($log, 'Conversion failed') && !stristr($log, 'Error opening filters')) {
+    if (!stristr($log, 'No VAAPI support') && !stristr($log, 'Conversion failed') && !stristr($log, 'Error opening filters') && !stristr($log, 'Invalid data found when processing input')) {
       // Validate duration
       preg_match("/Duration: (.*?), start:/", $log, $duration);
       preg_match_all("/time=(.*?) bitrate/", $log, $time);
@@ -182,51 +202,62 @@ class FFmpeg
     return false;
   }
 
-  private function taskEncode(array $args) {
-    // Set export
+  private function execEncode(array $args) {
+    // Set arguments
     $out = $this->path['out'] . $this->entry['path']['filename'];
-    putenv('FFREPORT=file='. $this->path['tmp'] . 'ffreport.log:level=32');
+    $args = $this->buildEncodeArgs($args);
 
+    // Execute ffmpeg
+    putenv('FFREPORT=file='. $this->path['tmp'] . 'ffreport.log:level=32');
+    shell_exec(sprintf('ffmpeg' . $args['cli'] . ' %s', escapeshellarg($out . $args['ext'])));
+    putenv('FFREPORT');
+    return $args;
+  }
+
+  private function taskEncode(array $args) {
     // Burn-In Subtitle
     if (!empty($args['burn-in'])) {
       foreach ($this->localeMatches($args['burn-in'], 'ass,ssa,srt,sub') as $file) {
         if (shell_exec('wc -l < '.escapeshellarg($file)) > 150) {
-          $args['args']['vf'] = 'subtitles=' . escapeshellarg($file);
+          $args['args']['vf'] = 'subtitles='.escapeshellarg($file);
           break;
         }
       }
     }
 
     // Execute encoding
-    $encode = $this->buildEncodeArgs($args);
-    shell_exec(sprintf('ffmpeg' . $encode['cli'] . ' %s', escapeshellarg($out . $encode['ext'])));
+    $encode = $this->execEncode($args);
     if (!$this->validate() && !empty($encode['fallback'])) {
-      $this->debug('Use fallback');
       $args['vcodec'] = $encode['fallback'];
-      $fallback = $this->buildEncodeArgs($args);
-      shell_exec(sprintf('ffmpeg' . $fallback['cli'] . ' %s', escapeshellarg($out . $fallback['ext'])));
+      $this->debug('Use fallback')->execEncode($args);
     }
 
     // Rename file
-    putenv('FFREPORT');
-    if (!$this->validate())
-      return rename($this->entry['file'], $this->entry['file'] . '.failed');
-
-    return rename($this->entry['file'], $this->entry['file'] . '.done');
-  }
-
-  public function taskThumbnail(array $args) {
-    foreach (glob($this->path['out'] . $this->entry['path']['filename'] . '*.{'.$args['exts'].'}', GLOB_BRACE) as $file) {
-      $out = escapeshellarg($this->path['tmp'] . '%03d.jpg');
-      shell_exec(sprintf('rm -rf %s; ffmpeg -v quiet -xerror -threads %d -i %s -an -s %s -vf fps=%s -qscale:v %d %s', escapeshellarg($this->path['tmp'] . '*'), $args['threads'], escapeshellarg($file), $args['size'], $args['fps'], $args['qscale'], $out));
-      @copy($this->path['tmp'] . '001.jpg', $this->path['out'] . $this->entry['path']['filename'] . '-thumb.jpg');
-      @copy($this->path['tmp'] . '002.jpg', $this->path['out'] . $this->entry['path']['filename'] . '-thumb.jpg');
+    if (!$this->validate()) {
+      rename($this->entry['file'], $this->entry['file'] . '.failed');
     }
+    else {
+      rename($this->entry['file'], $this->entry['file'] . '.done');
+    }
+
+    return $this;
   }
 
-  public function taskMontage(array $args) {
-    $out = escapeshellarg($this->path['out'] . $this->entry['path']['filename'] . '-screen.jpg');
-    shell_exec(sprintf('montage -mode %s -tile %dx %s %s', $args['mode'], $args['tile'], escapeshellarg($this->path['tmp'] . '*.jpg'), $out));
+  public function taskImages(array $args) {
+    $args = array_replace(['threads' => 0, 'size' => '319x180', 'images' => '60', 'qscale' => 10, 'mode' => 'concatenate', 'tile' => 3, 'quality' => 75, 'delay' => 60, 'exts' => 'mp4'], $args);
+    $out = $this->path['out'] . $this->entry['path']['filename'];
+    $scan = escapeshellarg($this->path['tmp'].'*.jpg');
+    foreach (glob($out . '.{'.$args['exts'].'}', GLOB_BRACE) as $file) {
+      // Clean-up
+      array_map('unlink', glob($this->path['tmp'] . '*.jpg'));
+
+      // Create images
+      $duration = ceil(shell_exec(sprintf('ffprobe -v error -select_streams v:0 -show_entries stream=duration -of default=noprint_wrappers=1:nokey=1 %s', escapeshellarg($file))));
+      shell_exec(sprintf('ffmpeg -v quiet -xerror -threads %d -ss 00:00:30 -i %s -t %d -an -s %s -vf fps=1/%d -qscale:v %d %s', $args['threads'], escapeshellarg($file), $duration - 15, $args['size'], $duration / 15, $args['qscale'], escapeshellarg($this->path['tmp'] . '%03d.jpg')));
+      shell_exec(sprintf('montage -border 0 -trim -crop 957x900 -mode %s -quality %d -tile %dx %s %s', $args['mode'], $args['quality'], $args['tile'], $scan, escapeshellarg("$out.jpg")));
+      shell_exec(sprintf('convert -delay %d -trim -loop 0 -quality %d %s %s', $args['delay'], $args['quality'], $scan, escapeshellarg("$out.gif")));
+    }
+    return $this;
   }
 
   public function extract(array $args) {
@@ -239,20 +270,8 @@ class FFmpeg
     return $this;
   }
 
-  public function thumbnail(array $args = ['threads' => 0, 'size' => '480x300', 'fps' => '1/100', 'qscale' => 10, 'exts' => 'mp4']) {
-    $this->tasks['thumbnail'] = $args;
-    return $this;
-  }
-
-  public function montage(array $args = ['mode' => 'concatenate', 'tile' => 3]) {
-    $this->tasks['montage'] = $args;
+  public function images(array $args = []) {
+    $this->tasks['images'] = $args;
     return $this;
   }
 }
-
-$ffmpeg = new FFmpeg('/mnt/data/convert/', '/mnt/data/convert/out/');
-$ffmpeg->extract(['subtitle' => 'eng,en,ned,nl,unknown'])
-       ->encode(['vcodec' => 'intel_h264_vaapi', 'burn-in' => 'eng,en,ned,nl,unknown', 'args' => ['threads' => 4]])
-       ->thumbnail()
-       ->montage()
-       ->start();
