@@ -1,8 +1,21 @@
 <?php
-require('../ffmpeg.php');
+require(__DIR__ . '/ffmpeg.php');
 
-$ffmpeg = new FFmpeg('/mnt/data/encode/', '/mnt/data/encoded/');
-$ffmpeg->extract(['subtitle' => 'eng,en,ned,nl,unknown'])
-       ->encode(['vcodec' => 'intel_h264_vaapi', 'burn-in' => 'eng,en,ned,nl,unknown', 'args' => ['threads' => 4]])
-       ->images()
-       ->start();
+// Init
+$ffmpeg = new FFmpeg(['output' => '/home/archie/Videos/HTML5/', 'hwaccel' => 'intel_h264_vaapi']);
+$ffmpeg->set('threads', 4);
+$ffmpeg->set('threads', 4, 'copy');
+
+// Scan
+foreach (glob('/home/archie/Videos/' . '*.{avi,divx,flv,m4v,mkv,mov,mp4,mpeg,mpg,ogm,wmv}', GLOB_BRACE) as $file) {
+  // Show file
+  echo "Processing $file\n";
+
+  // Exec encoding
+  echo date('d-m-Y @ H:i:s') . ": Encoding started\n";
+  $ffmpeg->input($file)->extract('subtitle')->encode();
+
+  // Exec images
+  echo date('d-m-Y @ H:i:s') . ": Creating images\n";
+  $ffmpeg->images();
+}

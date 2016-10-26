@@ -1,277 +1,285 @@
 <?php
 class FFmpeg
 {
-  private $path = [];
-  private $queue = [];
-  private $tasks = [];
-  private $entry = [];
+  private $config = [
+    'tmp' => '/tmp/convert/', // used for logging and creating images
+    'output' => null, // output folder
+    'copy' => ['flv','mkv','mp4'], // try to 'copy' videos with this extension (prevent re-encoding)
+    'subformat' => ['ass','ssa','srt','sub'], // valid subtitles formats
+    'hwaccel' => null, // try to use HW-acceleration
+    'image' => [
+      'number' => 15, // number of thumbs
+      'offset' => 25, // try to prevent credits
+      'size' => '319x180', // thumb size
+      'tile' => 3,
+      'delay' => 120 // animation speed
+    ]
+  ];
+  private $input = [];
+  private $args = [
+    'encode' => [
+      'y' => null, // allow overwrite
+      'xerror' => null, // fail on error
+      'v' => 'error', // logging level
+      'threads' => 0, // number of threads (0 = optimal)
+      'timelimit' => 3600, // timeout when encoding takes more <num> seconds
+      'vaapi_device' => null, // used for HWaccel
+      'hwaccel' => null, // used for HWaccel
+      'hwaccel_output_format' => null, // used for HWaccel
+      'i' => null, // input
+      'map' => '0:0 -map 0:1', // map video and audio
+      'c:v' => 'libx264', // codec to use for encoding
+      'crf' => 18, // encoding quality (default 22)
+      'preset' => 'ultrafast', // preset to use (slower results in more compression)
+      'tune' => 'zerolatency', // film, animation, fastdecode, etc. (or null to disable)
+      'vf' => null, // filter (TODO: burn-in subtitle(s))
+      'profile:v' => 'high', // high: iPad Air and later, iPhone 5s and later
+      'level:v' => '4.2', // 4.2: iPad Air and later, iPhone 5s and later
+      'movflags' => '+faststart', //  allow video playback before it is completely downloaded
+      'pix_fmt' => 'yuv420p', // use YUV pixel format and 4:2:0 Chroma subsampling
+      'c:a' => 'copy', // audio codec
+      'c:s' => null, // subtitle codec
+      'f' => 'mp4' // extension
+    ],
 
-  public function __construct(string $base, string $out, string $tmp = '/tmp/convert/') {
-    // Init
-    @mkdir($tmp, 0775);
-    $this->path = ['base' => $base, 'out' => $out, 'tmp' => $tmp];
+    'copy' => [
+      'y' => null,
+      'xerror' => null,
+      'v' => 'error',
+      'threads' => 0,
+      'timelimit' => 1800, // timeout when copying takes more <num> seconds
+      'i' => null,
+      'map' => '0:0 -map 0:1',
+      'c:v' => 'copy',
+      'c:a' => 'copy',
+      'c:s' => null,
+      'f' => 'mp4'
+    ]
+  ];
 
-    // Fill queue
-    foreach (glob($this->path['base'] .'*.{avi,divx,flv,m4v,mkv,mov,mp4,mpeg,mpg,ogm,wmv}', GLOB_BRACE) as $file) {
-      // Remove invalid symbols
-      $path = $this->clean($file);
-      rename($file, $path['fullpath']);
+  public function __construct(array $config = []) {
+    $this->config = array_replace_recursive($this->config, $config);
+    if (empty($this->config['tmp']) || empty($this->config['output']))
+      exit('Please specify the output and/or tmp path');
 
-      // Add to queue
-      $this->queue[] = ['file' => $path['fullpath'], 'path' => $path];
-    }
-
-    // Check we have data
-    if (empty($this->queue))
-      exit('No files to process');
+    @mkdir($this->config['tmp'], 0775);
+    @mkdir($this->config['output'], 0775);
   }
 
-  private function clean(string $file) {
-    $path = pathinfo($file);
+  public function set(string $key, $value, string $propery = 'ffmpeg') {
+    $this->args[$propery][$key] = $value;
+  }
+
+  public function input(string $path) {
+    // Set input
+    $this->input = $this->pathInfo($path);
+    rename($path, $this->input['path']);
+
+    // Set streams
+    $this->input['streams'] = $this->getStreams();
+
+    return $this;
+  }
+
+  private function buildArgs(array $args) {
+    $ret = '';
+    foreach ($args as $key => $value) {
+      $ret.= " -$key $value";
+    }
+    return rtrim($ret);
+  }
+
+  private function pathInfo(string $path) {
+    $path = pathinfo($path);
     $path['filename'] = preg_replace('/\s+/', ' ', $path['filename']);
-    $path['filename'] = preg_replace('/[^a-zA-Z0-9 ()_-]/', '', $path['filename']);
+    $path['filename'] = preg_replace('/[^a-zA-Z0-9 ()-]/', '', $path['filename']);
     $path['basename'] = trim($path['filename']) . '.' . $path['extension'];
-    $path['fullpath'] = $path['dirname'] . '/' . $path['basename'];
+    $path['path'] = $path['dirname'] . '/' . $path['basename'];
     return $path;
   }
 
-  private function streams() {
-    return json_decode(shell_exec('ffprobe -v quiet -print_format json -show_format -show_streams '.escapeshellarg($this->entry['file'])), true)['streams'];
-  }
+  private function getStreams() {
+    $ffprobe = json_decode(shell_exec('ffprobe -v quiet -print_format json -show_format -show_streams '.escapeshellarg($this->input['path'])), true)['streams'];
+    $streams = [];
+    foreach ($ffprobe as $stream) {
+      // Is this even possible?
+      if (empty($stream['codec_name']))
+        continue;
 
-  private function videoCodecArgs(string $vcodec) {
-    switch ($vcodec) {
-      case 'intel_h264_vaapi':
-          return [
-            'args' => [
-              'vf' => "format='nv12|vaapi,hwupload'",
-              'vaapi_device' => '/dev/dri/renderD128',
-              'hwaccel' => 'vaapi',
-              'hwaccel_output_format' => 'vaapi',
-              'vcodec' => 'h264_vaapi',
-              'profile:v' => 100,
-              'level:v' => 42,
-              'f' => 'mp4'
-            ],
-            'fallback' => 'libx264',
-            'ext' => '.mp4'
-          ];
-        break;
-      case 'libx264':
-        return [
-          'args' => [
-            'vcodec' => 'libx264',
-            'profile:v' => 'high',
-            'level:v' => '4.2',
-            'f' => 'mp4'
-          ],
-          'unset' => ['vaapi_device','hwaccel','hwaccel_output_format'],
-          'ext' => '.mp4'
-        ];
-        break;
-    }
-  }
-
-  private function buildEncodeArgs(array $overrule) {
-    $args = [
-      'args' => [
-        'y' => null,
-        'xerror' => null,
-        'v' => 'quiet',
-        'vaapi_device' => null,
-        'hwaccel' => 'none',
-        'hwaccel_output_format' => null,
-        'i' => escapeshellarg($this->entry['file']),
-        'vcodec' => 'libx264',
-        'profile:v' => 'high',
-        'level:v' => '4.2',
-        'preset' => 'ultrafast',
-        'movflags' => '+faststart',
-        'quality' => 2,
-        'vf' => null,
-        'threads' => 0,
-        'acodec' => 'aac',
-        'b:a' => '160k',
-        'f' => null
-      ],
-      'unset' => [],
-      'fallback' => '',
-      'ext' => '.mp4'
-    ];
-
-    // Merge arguments
-    $argsVcodec = $this->videoCodecArgs($overrule['vcodec']);
-    $args = array_replace_recursive($args, $argsVcodec);
-    $args = array_replace_recursive($args, $overrule);
-
-    // Unset if needed
-    if (!empty($args['unset'])) {
-      foreach ($args['unset'] as $key) {
-        unset($args['args'][$key]);
+      // Filters
+      $stream['codec_name'] = strtolower($stream['codec_name']);
+      if (!empty($stream['tags'])) {
+         $stream['tags'] = array_change_key_case($stream['tags']);
+         if (!empty($stream['tags']['language']))
+           $stream['locale'] = preg_replace('/[^a-zA-Z0-9 ()-]/', '', $stream['tags']['language']) ?: 'unknown';
       }
+
+      // Fix Subtitle codec_name
+      if ($stream['codec_type'] == 'subtitle')
+        $stream['codec_name'] = in_array($stream['codec_name'], $this->config['sub_formats']) ? $stream['codec_name'] : 'srt';
+
+      // Add as stream
+      $streams[$stream['codec_type']][] = $stream;
     }
-
-    // Build Filter
-    $args['args']['vf'] = !empty($overrule['args']['vf']) ? $overrule['args']['vf'] : '';
-    if (!empty($argsVcodec['args']['vf']))
-       $args['args']['vf'] = (!empty($args['args']['vf']) ? $args['args']['vf'] . ',' : '') . $argsVcodec['args']['vf'];
-
-    if (empty($args['args']['vf']))
-      unset($args['args']['vf']);
-
-    // Build for command
-    $args['cli'] = '';
-    foreach ($args['args'] as $key => $value) {
-      $args['cli'].= " -$key $value";
-    }
-    return $args;
+    return $streams;
   }
 
-  public function start() {
-    foreach ($this->queue as $entry) {
-      // Set data
-      $this->entry = $entry;
-      $this->entry['streams'] = $this->streams();
-
-      // Perform task
-      foreach ($this->tasks as $task => $args) {
-        $method = 'task' .ucfirst($task);
-        $this->debug("Start $method");
-        $this->{$method}($args);
-        $this->debug("End $method");
-      }
-    }
-  }
-
-  private function taskExtract(array $args) {
-    if (!empty($this->entry['streams'])) {
-      foreach ($this->entry['streams'] as $stream) {
-        if (empty($args[$stream['codec_type']]))
-          continue;
-
-        // Filter
-        $codec = strtolower($stream['codec_name']);
-        $tags = is_array($stream['tags']) ? array_change_key_case($stream['tags']) : [];
-        $language = preg_replace('/[^a-zA-Z]+/', '', $tags['language']) ?: 'unknown';
-
-        // Check Locale
-        if (!stristr($args[$stream['codec_type']], $language))
-          continue;
-
-        // On Subtitle
-        if ($stream['codec_type'] == 'subtitle')
-          $codec = in_array($codec, ['ass','ssa','srt','sub']) ? $codec : 'srt';
-
-        // Extract
-        $out = $this->path['base'] . $this->entry['path']['filename'] . "_ext_$language-" . $stream['index'] . ".$codec";
-        shell_exec(sprintf('ffmpeg -y -xerror -v quiet -threads 0 -i %s -map 0:%d %s', escapeshellarg($this->entry['file']), $stream['index'], escapeshellarg($out)));
+  public function extract(string $type = 'subtitle') {
+    if (!empty($this->input['streams'][$type])) {
+      foreach ($this->input['streams'][$type] as $stream) {
+        $path = $this->input['dirname'] . '/' .$this->input['filename'] . '_ext_' . $stream['locale'] . '_' . $stream['index'] . '.' . $stream['codec_name'];
+        shell_exec(sprintf('ffmpeg -y -xerror -v quiet -i %s -map 0:%d %s', escapeshellarg($this->input['path']), $stream['index'], escapeshellarg($path)));
       }
     }
     return $this;
   }
 
-  private function localeMatches(string $locales, string $exts) {
+  private function getExtract(array $exts) {
     $matches = [];
-    foreach (glob($this->path['base'] . $this->entry['path']['filename'] . '_ext_{'.$locales.'}*.{'.$exts.'}', GLOB_BRACE) as $file) {
+    foreach (glob($this->input['dirname'] . '/' . $this->input['filename'] . '_ext_*.{'.implode(',', $exts).'}', GLOB_BRACE) as $file) {
       $matches[] = $file;
     }
     return $matches;
   }
 
-  private function debug(string $str) {
-    $str = implode('|', [date('d-m-Y H:i:s'), $this->entry['file'], $str]);
-    file_put_contents($this->path['tmp'] . 'debug.log', $str . "\n", FILE_APPEND | LOCK_EX);
-    return $this;
+  private function getHWAccel(string $profile = 'intel_h264_vaapi') {
+    switch ($profile) {
+      case 'intel_h264_vaapi':
+        return [
+          'threads' => 1, // unstable when using more 1> threads
+          'vaapi_device' => '/dev/dri/renderD128',
+          'hwaccel' => 'vaapi',
+          'hwaccel_output_format' => 'vaapi',
+          'c:v' => 'h264_vaapi',
+          'profile:v' => 100,
+          'level:v' => 42,
+          'vf' => "format='nv12|vaapi,hwupload'",
+          'pix_fmt' => null,
+          'f' => 'mp4'
+        ];
+        break;
+      default:
+        exit('Unsupported HWAccel profile given');
+    }
   }
 
   private function validate() {
-    $log = file_get_contents($this->path['tmp'] . 'ffreport.log') ?: 'Conversion failed';
-    if (!stristr($log, 'No VAAPI support') && !stristr($log, 'Conversion failed') && !stristr($log, 'Error opening filters') && !stristr($log, 'Invalid data found when processing input')) {
-      // Validate duration
-      preg_match("/Duration: (.*?), start:/", $log, $duration);
-      preg_match_all("/time=(.*?) bitrate/", $log, $time);
+    // Not encoded
+    if (!file_exists($this->config['tmp'] . 'ffreport.log'))
+      return 'encode';
 
-      $duration = substr($duration[1], 0, 8);
-      $time = substr(end($time[1]), 0, 8);
-      if ($duration != $time) {
-        $this->debug("Duration mismatch ($duration <> $time)");
-        return false;
+    // Logging
+    $log = file_get_contents($this->config['tmp'] . 'ffreport.log');
+    if (!stristr($log, 'No VAAPI support') && !stristr($log, 'Failed to create a VAAPI device') && !stristr($log, 'Conversion failed') && !stristr($log, 'Error opening filters') && !stristr($log, 'Invalid data found when processing input')) {
+      // Duration (TODO: add margin)
+      preg_match("/Duration: (.*?), start:/", $log, $durations);
+      preg_match_all("/time=(.*?) bitrate/", $log, $times);
+      if (!empty($durations[1]) && !empty($times[1])) {
+        $duration = substr($durations[1], 0, 8) ?: true;
+        $time = substr(end($times[1]), 0, 8) ?: false;
+        return ($duration == $time) ? 'success' : 'mismatch';
       }
-      return true;
     }
-    return false;
+    return 'failed';
   }
 
-  private function execEncode(array $args) {
-    // Set arguments
-    $out = $this->path['out'] . $this->entry['path']['filename'];
-    $args = $this->buildEncodeArgs($args);
-
-    // Execute ffmpeg
-    putenv('FFREPORT=file='. $this->path['tmp'] . 'ffreport.log:level=32');
-    shell_exec(sprintf('ffmpeg' . $args['cli'] . ' %s', escapeshellarg($out . $args['ext'])));
-    putenv('FFREPORT');
-    return $args;
+  public function getDuration(string $path) {
+    return shell_exec(sprintf('ffprobe -v error -select_streams v:0 -show_entries stream=duration -of default=noprint_wrappers=1:nokey=1 %s', escapeshellarg($path)));
   }
 
-  private function taskEncode(array $args) {
-    // Burn-In Subtitle
-    if (!empty($args['burn-in'])) {
-      foreach ($this->localeMatches($args['burn-in'], 'ass,ssa,srt,sub') as $file) {
-        if (shell_exec('wc -l < '.escapeshellarg($file)) > 150) {
-          $args['args']['vf'] = 'subtitles='.escapeshellarg($file);
-          break;
+  public function encode() {
+    // Logging
+    putenv('FFREPORT=file='. $this->config['tmp'] . 'ffreport.log:level=32');
+    @unlink($this->config['tmp'] . 'ffreport.log');
+
+    // Set input
+    $this->args['encode']['i'] = escapeshellarg($this->input['path']);
+    $this->args['copy']['i'] = escapeshellarg($this->input['path']);
+
+    // Map subtitles
+    if (!empty($this->config['subformat'])) {
+      foreach ($this->getExtract($this->config['subformat']) as $key => $file) {
+        $file = escapeshellarg($file);
+        $language = explode('_', $file)[2];
+
+        // Set to args
+        foreach(['encode','copy'] as $arr) {
+          $this->args[$arr]['i'] = $this->args[$arr]['i'] . " -i $file";
+          $this->args[$arr]['map'] = $this->args[$arr]['map'] . ' -map 0:3';
+          $this->args[$arr]['c:s'] = 'mov_text';
+          $this->args[$arr]["metadata:s:s:$key"] = "language='$language'";
         }
       }
     }
 
-    // Execute encoding
-    $encode = $this->execEncode($args);
-    if (!$this->validate() && !empty($encode['fallback'])) {
-      $args['vcodec'] = $encode['fallback'];
-      $this->debug('Use fallback')->execEncode($args);
+    // When using HWAccel
+    $hwAccel = [];
+    if (!empty($this->config['hwaccel']))
+      $hwAccel = array_replace($this->args['encode'], $this->getHWAccel($this->config['hwaccel']));
+
+    // Unset unneeded
+    foreach (['vaapi_device','hwaccel','hwaccel_output_format','vf','tune','c:s','pix_fmt'] as $key) {
+      if (empty($this->args['encode'][$key])) {
+        unset($this->args['encode'][$key]);
+        unset($this->args['copy'][$key]);
+      }
+
+      if (empty($hwAccel[$key]))
+        unset($hwAccel[$key]);
     }
 
-    // Rename file
-    if (!$this->validate()) {
-      rename($this->entry['file'], $this->entry['file'] . '.failed');
+    // Copy
+    $output = escapeshellarg($this->config['output'] . $this->input['filename'] . '.' . $this->args['encode']['f']);
+    if (!empty($this->config['copy']) && in_array($this->input['extension'], $this->config['copy']))
+      shell_exec(sprintf('ffmpeg %s %s', $this->buildArgs($this->args['copy']), $output));
+
+    // Encode
+    if (in_array($this->validate(), ['encode','failed'])) {
+      // Use HWAccel
+      if (!empty($hwAccel['hwaccel']))
+        shell_exec(sprintf('ffmpeg %s %s', $this->buildArgs($hwAccel), $output));
+
+      // Failed or SW-encoding
+      if (in_array($this->validate(), ['encode','failed']))
+        shell_exec(sprintf('ffmpeg %s %s', $this->buildArgs($this->args['encode']), $output));
     }
-    else {
-      rename($this->entry['file'], $this->entry['file'] . '.done');
-    }
+
+    // Unset export
+    putenv('FFREPORT');
+
+    // Add status as extension
+    rename($this->input['path'], $this->input['path'] . '.' . $this->validate());
 
     return $this;
   }
 
-  public function taskImages(array $args) {
-    $args = array_replace(['threads' => 0, 'size' => '319x180', 'images' => '60', 'qscale' => 10, 'mode' => 'concatenate', 'tile' => 3, 'quality' => 75, 'delay' => 60, 'exts' => 'mp4'], $args);
-    $out = $this->path['out'] . $this->entry['path']['filename'];
-    $scan = escapeshellarg($this->path['tmp'].'*.jpg');
-    foreach (glob($out . '.{'.$args['exts'].'}', GLOB_BRACE) as $file) {
+  public function images() {
+    foreach (glob($this->config['output'] . $this->input['filename'] . '.{mkv,mp4}', GLOB_BRACE) as $file) {
       // Clean-up
-      array_map('unlink', glob($this->path['tmp'] . '*.jpg'));
+      array_map('unlink', glob($this->config['tmp'] . '*.jpg'));
 
-      // Create images
-      $duration = ceil(shell_exec(sprintf('ffprobe -v error -select_streams v:0 -show_entries stream=duration -of default=noprint_wrappers=1:nokey=1 %s', escapeshellarg($file))));
-      shell_exec(sprintf('ffmpeg -v quiet -xerror -threads %d -ss 00:00:30 -i %s -t %d -an -s %s -vf fps=1/%d -qscale:v %d %s', $args['threads'], escapeshellarg($file), $duration - 15, $args['size'], $duration / 15, $args['qscale'], escapeshellarg($this->path['tmp'] . '%03d.jpg')));
-      shell_exec(sprintf('montage -border 0 -trim -crop 957x900 -mode %s -quality %d -tile %dx %s %s', $args['mode'], $args['quality'], $args['tile'], $scan, escapeshellarg("$out.jpg")));
-      shell_exec(sprintf('convert -delay %d -trim -loop 0 -quality %d %s %s', $args['delay'], $args['quality'], $scan, escapeshellarg("$out.gif")));
+      // Needed variables
+      $image = $this->config['image'];
+      $output = $this->config['output'] . $this->input['filename'];
+      $duration = floor($this->getDuration($file)) - $image['offset'];
+      $splice = floor($duration / $image['number']);
+      $time = $splice;
+
+      // Should be 10> secs long
+      if ($duration > 10) {
+        // Create thumbs
+        for ($i = 1; $i <= $image['number']; $i++) {
+          shell_exec(sprintf("cd %s && mpv --quiet --no-audio --vo=image --start=%s --frames=1 %s", escapeshellarg($this->config['tmp']), $time, escapeshellarg($file)));
+          rename($this->config['tmp'] . '00000001.jpg', $this->config['tmp'] . "frame-$time.jpg");
+          $time += $splice;
+        }
+
+        // Resize thumbs, create screen and animation
+        shell_exec(sprintf('mogrify -resize %s %s', $image['size'], escapeshellarg($this->config['tmp'] . 'frame-*.jpg')));
+        shell_exec(sprintf('montage -border 0 -mode concatenate -quality 90 -tile %d %s %s', $image['tile'], escapeshellarg($this->config['tmp'] . 'frame-*.jpg'), escapeshellarg($output . '.jpg')));
+        shell_exec(sprintf('convert -loop 0 -delay %d -quality 90 %s %s', $image['delay'], escapeshellarg($this->config['tmp'] . 'frame-*.jpg'), escapeshellarg($output . '.gif')));
+      }
     }
-    return $this;
-  }
-
-  public function extract(array $args) {
-    $this->tasks['extract'] = $args;
-    return $this;
-  }
-
-  public function encode(array $args = ['vcodec' => 'libx264']) {
-    $this->tasks['encode'] = $args;
-    return $this;
-  }
-
-  public function images(array $args = []) {
-    $this->tasks['images'] = $args;
     return $this;
   }
 }
