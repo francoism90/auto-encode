@@ -17,15 +17,21 @@ This script has been written without the need of any other PHP dependencies/libr
 * Map metadata (e.g. subtitles, tags, etc.) of the original file, so it is available in the encoded file.
 
 ## Todo's
-* Burn-in subtitle support (removed in last revision, in favor of mapping)
+* External subtitle mapping support (e.g. `/path/of/original-video.srt`) (removed in last revision). Note: Subtitles included in the original file is already convert into the video-output.
 * Add more HWAccel-presets (please let me know your test results!)
 
 ## Examples
-See *examples*.
+See *example*.
 
 You should at least provide a target and temporary-path (used for logs, etc. default: `/tmp/convert`):
 ```
 $ffmpeg = new FFmpeg(['target' => '/path/to/output', 'tmp' => '/path/to/temp']);
+
+// How presets work
+$ffmpeg = new FFmpeg([
+  'target' => '/path/to/output',
+  'preset' => 'copy,intel_h264_vaapi,default' // try 'copy' first, if that fails, try intel_h264_vaapi, SW-preset is the last preset to try
+]);
 
 // More advanced configuration
 $ffmpeg = new FFmpeg([
@@ -41,7 +47,7 @@ $ffmpeg = new FFmpeg([
       'tune' => 'film'
     ]
   ],
-  'preset' => 'default'
+  'preset' => 'default' // or 'copy,default'
 ]);
 
 ```
@@ -58,14 +64,14 @@ Create thumbnails, a screenshot and an animated gif of video files.
 * [jpegoptim](https://www.archlinux.org/packages/community/x86_64/jpegoptim/)
 
 ## Examples
-See *examples*.
+See *example*.
 
 ```
 $thumbs = new Thumbs([
   'target' => '/path/to/output',
   'thumbs' => 25, // number of thumbnails
   'delay' => 100, // animation (gif) delay
-  //'force' => true, // overwrite already produced images
+  //'force' => true // overwrite already produced images
 ]);
 
 // You should always use thumbs() as first method
