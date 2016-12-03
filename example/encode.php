@@ -2,11 +2,10 @@
 require(__DIR__ . '/../src/ffmpeg.php');
 
 // Init
-$target = '/path/to/video/files';
-$ffmpeg = new FFmpeg(['target' => $target, 'preset' => 'copy,intel_h264_vaapi,default']);
+$ffmpeg = new FFmpeg(['target' => '/path/to/output', 'preset' => 'copy,intel_h264_vaapi,default']);
 
 // Scan path and loop
-foreach (glob($target . '/*.{avi,divx,flv,m4v,mkv,mov,mp4,mpeg,mpg,ogm,wmv}', GLOB_BRACE) as $file) {
+foreach (glob('/path/of/video/files/*.{avi,divx,flv,m4v,mkv,mov,mp4,mpeg,mpg,ogm,wmv}', GLOB_BRACE) as $file) {
   // Show file
   echo "Processing $file\n";
 
@@ -18,4 +17,4 @@ foreach (glob($target . '/*.{avi,divx,flv,m4v,mkv,mov,mp4,mpeg,mpg,ogm,wmv}', GL
 }
 
 // Only one file
-$ffmpeg->input('/path/to/video/file.avi')->encode();
+$ffmpeg->input('/path/of/video/file.avi')->encode();

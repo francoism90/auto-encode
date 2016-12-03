@@ -196,7 +196,7 @@ class FFmpeg
   private function map() {
     // Valid streams ffmpeg can encode (TODO: add more if needed)
     $codec = [
-      // -metaday:s:[key]:[index]
+      // -metadata:s:[key]:[index]
       'a' => 'audio',
       's' => 'subtitle',
       'v' => 'video'

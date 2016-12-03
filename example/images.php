@@ -2,11 +2,10 @@
 require(__DIR__ . '/../src/thumbs.php');
 
 // Init
-$target = '/path/to/video/files';
-$thumbs = new Thumbs(['target' => $target]);
+$thumbs = new Thumbs(['target' => '/path/to/output']);
 
 // Scan path and loop
-foreach (glob($target . '/*.{mp4,mkv}', GLOB_BRACE) as $file) {
+foreach (glob('/path/of/video/files/*.{mp4,mkv}', GLOB_BRACE) as $file) {
   // Show file
   echo "Processing $file\n";
 
@@ -18,4 +17,4 @@ foreach (glob($target . '/*.{mp4,mkv}', GLOB_BRACE) as $file) {
 }
 
 // Only one file
-$thumbs->input('/path/to/video/file.mp4')->thumbs()->screen()->animation();
+$thumbs->input('/path/of/video/file.mp4')->thumbs()->screen()->animation();
