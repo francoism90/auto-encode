@@ -17,7 +17,7 @@ This script has been written without the need of any other PHP dependencies/libr
 * Map metadata (e.g. subtitles, tags, etc.) of the original file, so it is available in the encoded file.
 
 ## Todo's
-* External subtitle mapping support (e.g. `/path/of/original-video.srt`) (removed in last revision). Note: Subtitles included in the original file is already convert into the video-output.
+* External subtitle mapping support (e.g. `/path/of/original-video.srt`) (removed in last revision). Note: Subtitles included in the original file are already converted into the encoded video.
 * Add more HWAccel-presets (please let me know your test results!)
 
 ## Examples
@@ -30,7 +30,7 @@ $ffmpeg = new FFmpeg(['target' => '/path/to/output', 'tmp' => '/path/to/temp']);
 // How presets work
 $ffmpeg = new FFmpeg([
   'target' => '/path/to/output',
-  'preset' => 'copy,intel_h264_vaapi,default' // try 'copy' first, if that fails, try intel_h264_vaapi, SW-preset is the last preset to try
+  'preset' => 'copy,intel_h264_vaapi,default' // try to use 'copy' preset first, if that fails, try intel_h264_vaapi preset, SW-preset is the last preset to try - see source of ffmpeg.php for the preset options
 ]);
 
 // More advanced configuration
