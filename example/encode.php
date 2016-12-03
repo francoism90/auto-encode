@@ -1,21 +1,21 @@
 <?php
-require(__DIR__ . '/ffmpeg.php');
+require(__DIR__ . '/../src/ffmpeg.php');
 
 // Init
-$ffmpeg = new FFmpeg(['output' => '/home/archie/Videos/HTML5/', 'hwaccel' => 'intel_h264_vaapi']);
-$ffmpeg->set('threads', 4);
-$ffmpeg->set('threads', 4, 'copy');
+$target = '/path/to/video/files';
+$ffmpeg = new FFmpeg(['target' => $target, 'preset' => 'copy,intel_h264_vaapi,default']);
 
-// Scan
-foreach (glob('/home/archie/Videos/' . '*.{avi,divx,flv,m4v,mkv,mov,mp4,mpeg,mpg,ogm,wmv}', GLOB_BRACE) as $file) {
+// Scan path and loop
+foreach (glob($target . '/*.{avi,divx,flv,m4v,mkv,mov,mp4,mpeg,mpg,ogm,wmv}', GLOB_BRACE) as $file) {
   // Show file
   echo "Processing $file\n";
 
   // Exec encoding
-  echo date('d-m-Y @ H:i:s') . ": Encoding started\n";
-  $ffmpeg->input($file)->extract('subtitle')->encode();
+  $ffmpeg->input($file)->encode();
 
-  // Exec images
-  echo date('d-m-Y @ H:i:s') . ": Creating images\n";
-  $ffmpeg->images();
+  // All done
+  echo date('d-m-Y @ H:i:s') . ": Tasks done\n";
 }
+
+// Only one file
+$ffmpeg->input('/path/to/video/file.avi')->encode();
