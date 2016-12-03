@@ -50,5 +50,26 @@ $ffmpeg = new FFmpeg([
 Create thumbnails, a screenshot and an animated gif of video files.
 
 ## Requirements
+* [Linux](https://www.archlinux.org/)
+* [php](https://www.archlinux.org/packages/extra/x86_64/php/)
+* [ffmpeg](https://www.archlinux.org/packages/extra/x86_64/ffmpeg) (ffprobe should be included)
 * [imagemagick](https://www.archlinux.org/packages/extra/x86_64/imagemagick)
 * [mpv](https://www.archlinux.org/packages/extra/x86_64/imagemagick)
+* [jpegoptim](https://www.archlinux.org/packages/community/x86_64/jpegoptim)
+
+## Examples
+See *examples*.
+
+```
+$thumbs = new Thumbs([
+  'target' => '/path/to/output',
+  'thumbs' => 25, // number of thumbnails
+  'delay' => 100, // animation (gif) delay
+  //'force' => true, // overwrite already produced images
+]);
+
+// You should always use thumbs() as first method
+$thumbs->input('/path/of/video/file.mp4')->thumbs()->screen()->animation();
+$thumbs->input('/path/of/video/file.mp4')->thumbs()->animation();
+$thumbs->input('/path/of/video/file.mp4')->thumbs()->screen();
+```
