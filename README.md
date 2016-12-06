@@ -3,12 +3,12 @@
 # auto-encode
 Massconvert (or just a video file) into any videoformat readable by ffmpeg to H.264 video optimized for web.
 
-This script has been written without the need of any other PHP dependencies/libraries.
+This script has been written without the need of any other PHP-dependencies/libraries.
 
 ## Requirements
 * [Linux](https://www.archlinux.org/) (or any other distro, e.g. Ubuntu, Debian, etc.)
 * [php](https://www.archlinux.org/packages/extra/x86_64/php/)
-* [ffmpeg](https://www.archlinux.org/packages/extra/x86_64/ffmpeg/) (ffprobe should be included)
+* [ffmpeg](https://www.archlinux.org/packages/extra/x86_64/ffmpeg/) (+ffprobe +codecs)
 
 ## Features
 * Fast convert ('copy') on supported formats (e.g. MKV > MP4, FLV > MP4, etc.), with fallback to software encoding
@@ -58,10 +58,9 @@ Create thumbnails, a screenshot and an animated gif of video files.
 ## Requirements
 * [Linux](https://www.archlinux.org/)
 * [php](https://www.archlinux.org/packages/extra/x86_64/php/)
-* [ffmpeg](https://www.archlinux.org/packages/extra/x86_64/ffmpeg/) (ffprobe should be included)
-* [imagemagick](https://www.archlinux.org/packages/extra/x86_64/imagemagick/)
-* [mpv](https://www.archlinux.org/packages/community/x86_64/mpv/)
-* [jpegoptim](https://www.archlinux.org/packages/community/x86_64/jpegoptim/)
+* [ffmpeg](https://www.archlinux.org/packages/extra/x86_64/ffmpeg/) (+ffprobe)
+* [imagemagick](https://www.archlinux.org/packages/extra/x86_64/imagemagick/) (+montage +convert)
+* [jpegoptim](https://www.archlinux.org/packages/community/x86_64/jpegoptim/) (optional)
 
 ## Examples
 See *example*.
@@ -71,6 +70,7 @@ $thumbs = new Thumbs([
   'target' => '/path/to/output',
   'thumbs' => 25, // number of thumbnails
   'delay' => 100, // animation (gif) delay
+  'optimize' => false, // don't use jpegoptim
   //'force' => true // overwrite already produced images
 ]);
 
