@@ -5,8 +5,15 @@ class FFmpeg
     'target' => null,
     'tmp' => '/tmp/convert',
     'bin' => [
-      'ffprobe' => '/usr/bin/ffprobe',
-      'ffmpeg' => '/usr/bin/ffmpeg'
+      'ffmpeg' => '/usr/bin/ffmpeg',
+      'ffprobe' => '/usr/bin/ffprobe'
+    ],
+    'map' => [
+      'a' => 'audio',
+      's' => 'subtitle',
+      'v' => 'video'
+      //'d' => 'data',
+      //'t' => 'attachment'
     ],
     'str_failed' => [
       'moov atom not found', 'Conversion failed', 'Invalid data',
@@ -19,12 +26,14 @@ class FFmpeg
       'default' => [
         'y' => null,
         'v' => 'error',
+        'xerror' => null,
         'threads' => 0,
         'dts_delta_threshold' => 1000,
         'timelimit' => 5400,
         'vaapi_device' => null,
         'hwaccel' => null,
         'hwaccel_output_format' => null,
+        'fflags' => '+genpts',
         'i' => null,
         'c:v' => 'libx264',
         'crf' => 20, // encoding quality (default 23)
@@ -97,42 +106,47 @@ class FFmpeg
 
   public function encode() {
     // Set arguments
-    $arr = $this->config['presets']['default'];
-    $arr['i'] = escapeshellarg($this->input['path']);
-    $arr[] =  $this->map();
+    $default = $this->config['presets']['default'];
+    $input = escapeshellarg($this->input['path']);
+    $map = $this->map();
 
     // Loop through presets
     foreach (explode(',', $this->config['preset']) as $preset) {
       // Preset arguments
       $presetArgs = $this->config['presets'][$preset];
-      $args = $this->buildArgs(array_merge($arr, $presetArgs));
-      $output = "{$this->config['target']}/{$this->input['filename']}.{$presetArgs['f']}";
+      $target = "{$this->config['target']}/{$this->input['filename']}.{$presetArgs['f']}";
+
+      // Build arguments
+      $args = array_merge($default, $presetArgs);
+      $args['i'] = $input;
+      $args[] = $map;
+      $args[] = escapeshellarg($target);
 
       // Set Logging
       $status = 'error';
       $report = $this->config['tmp'] . '/ffreport.log';
-      putenv("FFREPORT=file=$report:level=32");
+      putenv('FFREPORT=file='.escapeshellarg($report).':level=24');
       @unlink($report);
 
       // Execute ffmpeg
-      $this->execute('ffmpeg', "$args ".escapeshellarg($output));
+      $this->execute('ffmpeg', $this->buildArgs($args));
 
       // Unset logging
       putenv('FFREPORT');
 
       // Validate encoding
-      if (file_exists($output) && file_exists($report)) {
-        $duration = $this->duration($output);
+      if (file_exists($target) && file_exists($report)) {
+        $output = $this->duration($target);
         $logging  = file_get_contents($report);
         foreach ($this->config['str_failed'] as $str) {
-          if (stristr($logging, $str) || stristr($duration, $str)) {
+          if (stristr($logging, $str) || stristr($output, $str)) {
             $status = 'failed';
             break;
           }
         }
 
         // Check video duration
-        if (!empty($duration) && !in_array($status, ['failed','error'])) {
+        if (!empty($output) && $status != 'failed') {
           preg_match("/Duration: (.*?), start:/", $logging, $durations);
           preg_match_all("/time=(.*?) bitrate/", $logging, $times);
           $duration = substr($durations[1], 0, 8);
@@ -143,7 +157,7 @@ class FFmpeg
       }
 
       // Delete on fail/error
-      @unlink($output);
+      @unlink($target);
     }
 
     // Rename on status
@@ -186,26 +200,16 @@ class FFmpeg
   }
 
   private function duration(string $path) {
-    $args = "-v error -analyzeduration 2147483647 -probesize 2147483647 ";
-    $args.= "-select_streams v:0 -show_entries stream=duration ";
+    $args = "-v error -select_streams v -show_entries stream=duration ";
     $args.= "-of default=noprint_wrappers=1:nokey=1 ";
     $args.= escapeshellarg($path);
     return $this->execute('ffprobe', $args);
   }
 
   private function map() {
-    // Valid streams ffmpeg can encode (TODO: add more if needed)
-    $codec = [
-      // -metadata:s:[key]:[index]
-      'a' => 'audio',
-      's' => 'subtitle',
-      'v' => 'video'
-    ];
-
-    // Build string
     $str = '';
     foreach ($this->input['streams'] as $stream) {
-      $key = array_search($stream['codec_type'], $codec);
+      $key = array_search($stream['codec_type'], $this->config['map']);
       if (empty($key))
         continue;
 

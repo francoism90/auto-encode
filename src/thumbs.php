@@ -6,19 +6,20 @@ class Thumbs
     'tmp' => '/tmp/convert',
     'thumbs' => 55,
     'thumbsize' => '320x180',
-    'end_offset' => 25,
+    'qscale' => 8,
+    'end_offset' => 25, // in seconds
     'border' => 0,
     'mode' => 'concatenate',
     'tile' => 5,
     'delay' => 85,
     'force' => false,
+    'optimize' => true,
     'bin' => [
+      'ffmpeg' => '/usr/bin/ffmpeg',
       'ffprobe' => '/usr/bin/ffprobe',
-      'mpv' => '/usr/bin/mpv',
-      'mogrify' => '/usr/bin/mogrify',
-      'jpegoptim' => '/usr/bin/jpegoptim',
       'montage' => '/usr/bin/montage',
       'convert' => '/usr/bin/convert',
+      'jpegoptim' => '/usr/bin/jpegoptim'
     ]
   ];
   private $input = [];
@@ -54,30 +55,30 @@ class Thumbs
     $this->clean();
 
     // File info
-    $output = "{$this->config['target']}/{$this->input['filename']}.jpg";
+    $input = escapeshellarg($this->input['path']);
+    $screen = "{$this->config['target']}/{$this->input['filename']}.jpg";
     $duration = floor($this->duration($this->input['path']) - $this->config['end_offset']);
-    if (($this->config['force'] || !file_exists($output)) && $duration > 5) {
+    if (($this->config['force'] || !file_exists($screen)) && $duration > 5) {
+      // Splice video
       $splice = floor($duration / $this->config['thumbs']);
       $time = $splice;
 
       // Loop
       for ($i = 1; $i <= $this->config['thumbs']; $i++) {
+        // Time format for ffmpeg
+        $format = gmdate('H:i:s', $time);
+        $output = "{$this->config['tmp']}/i-".sprintf("%03d", $i).".jpg";
+
         // Create thumb
-        $args = "--quiet --no-audio --vo=image --frames=1 ";
-        $args.= "-vo-image-outdir={$this->config['tmp']} --start=$time ";
-        $args.= escapeshellarg($this->input['path']);
-        $this->execute('mpv', $args);
+        $args = "-y -v error -threads 0 -timelimit 60 -ss $format -i $input ";
+        $args.= "-to $format -an -vframes 1 -s {$this->config['thumbsize']} ";
+        $args.= "-qscale:v {$this->config['qscale']} ";
+        $args.= escapeshellarg($output);
+        $this->execute('ffmpeg', $args);
 
-        // Rename
-        rename("{$this->config['tmp']}/00000001.jpg", "{$this->config['tmp']}/i-".sprintf("%02d", $i).'.jpg');
-        if ($i < $this->config['thumbs'])
-          $time += $splice;
+        // Increase for next part
+        $time += $splice;
       }
-
-      // Resize
-      $args = "-resize {$this->config['thumbsize']} -strip -trim ";
-      $args.= escapeshellarg("{$this->config['tmp']}/i-*.jpg");
-      $this->execute('mogrify', $args);
 
       // Optimize
       $this->optimize("{$this->config['tmp']}/i-*.jpg");
@@ -86,7 +87,7 @@ class Thumbs
   }
 
   public function screen() {
-    if (file_exists("{$this->config['tmp']}/i-{$this->config['thumbs']}.jpg")) {
+    if (file_exists("{$this->config['tmp']}/i-001.jpg")) {
       $output = "{$this->config['target']}/{$this->input['filename']}.jpg";
 
       // Create Screenshot
@@ -96,13 +97,14 @@ class Thumbs
       $this->execute('montage', $args);
 
       // Optimize
-      $this->optimize($output);
+      if ($this->config['optimize'])
+        $this->optimize($output);
     }
     return $this;
   }
 
   public function animation() {
-    if (file_exists("{$this->config['tmp']}/i-{$this->config['thumbs']}.jpg")) {
+    if (file_exists("{$this->config['tmp']}/i-001.jpg")) {
       $output = "{$this->config['target']}/{$this->input['filename']}.gif";
 
       // Create animation
@@ -123,8 +125,7 @@ class Thumbs
   }
 
   private function duration(string $path) {
-    $args = "-v error -analyzeduration 2147483647 -probesize 2147483647 ";
-    $args.= "-select_streams v:0 -show_entries stream=duration ";
+    $args = "-v error -select_streams v:0 -show_entries stream=duration ";
     $args.= "-of default=noprint_wrappers=1:nokey=1 ";
     $args.= escapeshellarg($path);
     return $this->execute('ffprobe', $args);
